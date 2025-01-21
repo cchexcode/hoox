@@ -52,7 +52,8 @@ hooks:
     # use YAML anchor
     - command: *cargo
     # use inline command
-    - command: !inline 'cargo doc --no-deps'
+    - command: !inline |-
+        cargo doc --no-deps
       verbosity: stderr
       severity: warn
     # reference a script file (path is relative to Git repo root)
