@@ -21,7 +21,7 @@ default = []
 [dependencies]
 async-trait = "0.1.82"
 tokio = { version = "1.40.0", features = ["rt", "rt-multi-thread", "macros"] }
-clap = "4.5.17"
+clap = "4.5.20"
 clap_complete = "4.5.26"
 clap_mangen = "0.2.23"
 clap-markdown = "0.1.4"
