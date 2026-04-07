@@ -3,13 +3,13 @@ version: "0.0.0"
 .cargo_all: &cargo_all !inline |-
   set -e
   cargo build --all-features
-  # cargo +nightly fmt --all -- --check
-  # cargo +nightly clippy --all -- -D warnings
   cargo test --all
   cargo doc --no-deps
 
 hooks:
-  "pre-commit": # pre-commit hook
+  "pre-commit":
     - command: *cargo_all
-  "pre-push": # pre-push hook
+      files: !glob "**/*.rs"
+  "pre-push":
     - command: *cargo_all
+      files: !glob "**/*.rs"

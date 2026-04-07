@@ -5,10 +5,11 @@ use std::{
 };
 
 use anyhow::Result;
+use clap::CommandFactory;
 use clap_complete::Shell;
 use clap_mangen::Man;
 
-use crate::args::ClapArgumentLoader;
+use crate::args::Cli;
 
 fn collect_commands() -> Vec<(String, clap::Command)> {
     let mut cmds: Vec<(String, clap::Command)> = Vec::new();
@@ -19,32 +20,32 @@ fn collect_commands() -> Vec<(String, clap::Command)> {
             rec_add(new_path, cmds, subc);
         }
     }
-    rec_add("", &mut cmds, &ClapArgumentLoader::root_command());
+    rec_add("", &mut cmds, &Cli::command());
     cmds
 }
 
-pub fn build_shell_completion(outdir: &Path, shell: &Shell) -> Result<()> {
-    let mut app = ClapArgumentLoader::root_command();
-    clap_complete::generate_to(*shell, &mut app, "hoox", outdir)?;
-
+pub fn build_shell_completion(outdir: &Path, shell: Shell) -> Result<()> {
+    let mut app = Cli::command();
+    clap_complete::generate_to(shell, &mut app, "hoox", outdir)?;
     Ok(())
 }
 
 pub fn build_markdown(outdir: &Path) -> Result<()> {
     for cmd in collect_commands() {
-        let file = Path::new(&outdir).join(format!("{}.md", cmd.0.strip_prefix('-').unwrap()));
-        let mut file = File::create(&file)?;
-        let _ = file.write(clap_markdown::help_markdown_command(&cmd.1).as_bytes())?;
+        let name = cmd.0.strip_prefix('-').unwrap_or(&cmd.0);
+        let file_path = outdir.join(format!("{}.md", name));
+        let mut file = File::create(&file_path)?;
+        file.write_all(clap_markdown::help_markdown_command(&cmd.1).as_bytes())?;
     }
     Ok(())
 }
 
 pub fn build_manpages(outdir: &Path) -> Result<()> {
     for cmd in collect_commands() {
-        let file = Path::new(&outdir).join(format!("{}.1", cmd.0.strip_prefix('-').unwrap()));
-        let mut file = File::create(&file)?;
+        let name = cmd.0.strip_prefix('-').unwrap_or(&cmd.0);
+        let file_path = outdir.join(format!("{}.1", name));
+        let mut file = File::create(&file_path)?;
         Man::new(cmd.1).render(&mut file)?;
     }
-
     Ok(())
 }

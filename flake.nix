@@ -36,7 +36,7 @@
             export RUST_BACKTRACE=1
 
             # make sure hooks are installed
-            cargo install --force --path .
+            cargo install --force --path crates/hoox
             hoox init
 
             printf "Versions:\n"

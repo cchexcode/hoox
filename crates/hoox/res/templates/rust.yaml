@@ -7,10 +7,15 @@
 hooks:
   "pre-commit": # pre-commit hook
     - command: *cargo_fmt_check # re-use anchor
+      files: !glob "**/*.rs"
     - command: *cargo_test
+      files: !glob "**/*.rs"
     - command: !inline 'cargo doc --no-deps'
+      files: !glob "**/*.rs"
       verbosity: stderr # [all, none, stdout, stderr]
       severity: warn # [error, warn]
   "pre-push": # pre-push hook
     - command: *cargo_fmt_check
+      files: !glob "**/*.rs"
     - command: *cargo_test
+      files: !glob "**/*.rs"

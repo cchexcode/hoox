@@ -1,46 +1,27 @@
-[package]
-name = "hoox"
+[workspace]
+resolver = "2"
+members = ["crates/hoox"]
+
+[workspace.package]
 version = "0.0.0"
-authors = ["Alexander Weber <aw@voidpointergroup.com>"]
 edition = "2021"
 license = "MIT"
-description = "Git hooks on steroids."
-homepage = "https://github.com/replicadse/hoox"
 repository = "https://github.com/replicadse/hoox"
-keywords = ["hoox"]
-categories = ["command-line-utilities"]
-readme = "docs/README.md"
+description = "Git hooks on steroids"
 
-[[bin]]
-name = "hoox"
-path = "./src/main.rs"
-
-[features]
-default = []
-
-[dependencies]
-async-trait = "0.1.82"
-tokio = { version = "1.40.0", features = ["rt", "rt-multi-thread", "macros"] }
-clap = "4.5.17"
-clap_complete = "4.5.26"
-clap_mangen = "0.2.23"
-clap-markdown = "0.1.4"
-serde = { version = "1.0.210", features = ["derive"] }
-serde_yaml = "0.9.34"
-anyhow = "1.0.87"
-version-compare = "0.2.0"
-
-[build-dependencies]
-async-trait = "0.1.82"
-tokio = { version = "1.40.0", features = ["rt", "rt-multi-thread", "macros"] }
-serde = { version = "1.0.210", features = ["derive"] }
-serde_yaml = "0.9.34"
-anyhow = "1.0.87"
-ci_info = "0.14.14"
-version-compare = "0.2.0"
+[workspace.dependencies]
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+clap_mangen = "0.2"
+clap-markdown = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+anyhow = "1"
+git2 = "0.19"
+globset = "0.4"
+regex = "1"
 
 [profile.release]
 lto = true
 codegen-units = 1
 panic = "abort"
-

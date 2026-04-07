@@ -2,38 +2,36 @@
 
 ![](hoox.png)
 
-`hoox` is an application / library that allows users to manage git hooks as part of the repository.
+`hoox` is a CLI tool that allows users to manage Git hooks declaratively as part of the repository.
 
 ## Workflow
 
 ### CLI install
 
-The Git hooks will contain calls to the `hoox` cli, therefore making it necessary that the `hoox` CLI is installed in order to execute the Git hooks. If it is not installed, the hooks will fail and prevent the operation (by default).
+The Git hooks contain calls to the `hoox` CLI, so it must be installed for hooks to execute. If not installed, hooks will fail and prevent the operation (by default).
 
 ### Repo initialization
 
 In order to initialize a repo you can either:
 
-- Add hoox to the dev-dependencies of the crate you're working with (if you're working on a rust project)
+- Add hoox to the dev-dependencies of a Rust crate you're working with:
   ```bash
   cargo add hoox --dev
   ```
-  This command installs hoox in the git repository during the build process (using a custom `build.rs`) even when it's not in the root `Cargo.toml`. It moves up the directory path, starting from the `OUT_DIR` env variable during build (usually the `target` folder), to find the first folder containing a `.git` subfolder.
-- OR install hoox manually into the Git folder with
+  This installs hooks during the build process (via `build.rs`) even when hoox is not in the root `Cargo.toml`. It walks up the directory tree from the `OUT_DIR` env variable to find the `.git` folder.
+
+- OR install hooks manually:
   ```bash
   hoox init
   ```
-  This method works the same way as the method mentioned above although it does not use the `OUT_DIR` env variable that is present during build but it uses the current working directory of the shell (`cwd`).
 
 ### Run hooks manually
-
-To run hooks manually, use:
 
 ```bash
 hoox run $HOOK_NAME
 ```
 
-If the hook `$HOOK_NAME` was _not_ specified in the `.hoox.toml` file, this command will fail. In order to make the command succeed and ignore the missing hook definition, pass the `--ignore-missing` parameter.
+If the hook `$HOOK_NAME` is not defined in `.hoox.yaml`, this command will fail. Pass `--ignore-missing` to skip undefined hooks silently.
 
 ## Example
 
@@ -41,6 +39,7 @@ If the hook `$HOOK_NAME` was _not_ specified in the `.hoox.toml` file, this comm
 version: "0.0.0"
 verbosity: all
 
+# YAML anchors for reuse
 .cargo: &cargo !inline |-
   set -e
   set -u
@@ -49,33 +48,69 @@ verbosity: all
 
 hooks:
   "pre-commit":
-    # use YAML anchor
+    # re-use YAML anchor — only runs when Rust files are staged
     - command: *cargo
-    # use inline command
+      files: !glob "**/*.rs"
+
+    # inline command with output control
     - command: !inline |-
         cargo doc --no-deps
       verbosity: stderr
       severity: warn
-    # reference a script file (path is relative to Git repo root)
+
+    # reference a script file (path relative to repo root)
     - command: !file "./hello_world.sh"
-    # reference a script file with custom program
+
+    # custom program executor with glob file matching
     - command: !file "./hello_world.py"
       program: ["python3", "-c"]
+      files: !glob "**/*.py"
       verbosity: stderr
       severity: error
 
+    # multiple glob patterns
+    - command: !inline 'prettier --check .'
+      files: !glob
+        - "**/*.js"
+        - "**/*.ts"
+        - "**/*.css"
+
+    # regex pattern
+    - command: !inline 'check-migrations'
+      files: !regex "migrations/.*\\.sql$"
+
+    # multiple regex patterns
+    - command: !inline 'validate-schema'
+      files: !regex
+        - "src/schema/.*\\.rs$"
+        - ".*\\.graphql$"
+
   "pre-push":
-    # re-use YAML anchor
     - command: *cargo
+      files: !glob "**/*.rs"
 
   "prepare-commit-msg":
-    # write to $COMMIT_MSG_FILE ($1) which is going to be the template commit message for this commit
-    # which is subsequently opened in the $EDITOR program.
-    # $0 = path to "hoox.yaml" file in any hook
+    # write to $COMMIT_MSG_FILE ($1) — template commit message for $EDITOR
+    # $0 = path to ".hoox.yaml" file in any hook
     - command: !inline |-
         COMMIT_MSG_FILE=$1
         echo "Work in progress" > $COMMIT_MSG_FILE
 ```
+
+### File matching
+
+The `files` field uses YAML tags to select the matching mode — `!glob` or `!regex`:
+```yaml
+files: !glob "**/*.rs"                    # single glob
+files: !glob ["**/*.rs", "**/*.toml"]     # multiple globs
+files: !regex "src/.*\\.rs$"              # single regex
+files: !regex [".*\\.rs$", ".*test.*"]    # multiple regexes
+```
+
+Changed file detection (via libgit2, no shell-out):
+- For `pre-commit`, `prepare-commit-msg`, `commit-msg`: staged files (index vs HEAD)
+- For all other hooks: workdir diff vs HEAD
+- Commands without `files` always run
 
 ### Available hooks
 

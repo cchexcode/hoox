@@ -1,0 +1,31 @@
+[package]
+name = "hoox"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description.workspace = true
+authors = ["Alexander Weber <aw@voidpointergroup.com>"]
+homepage = "https://github.com/replicadse/hoox"
+keywords = ["hoox", "git", "hooks"]
+categories = ["command-line-utilities"]
+readme = "../../docs/README.md"
+
+[[bin]]
+name = "hoox"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+clap_complete.workspace = true
+clap_mangen.workspace = true
+clap-markdown.workspace = true
+serde.workspace = true
+serde_yaml.workspace = true
+anyhow.workspace = true
+git2.workspace = true
+globset.workspace = true
+regex.workspace = true
+
+[build-dependencies]
+ci_info = "0.14"
