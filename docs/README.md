@@ -31,80 +31,96 @@ In order to initialize a repo you can either:
 hoox run $HOOK_NAME
 ```
 
-If the hook `$HOOK_NAME` is not defined in `.hoox.yaml`, this command will fail. Pass `--ignore-missing` to skip undefined hooks silently.
+If the hook `$HOOK_NAME` is not defined in `.hoox.conf`, this command will fail. Pass `--ignore-missing` to skip undefined hooks silently.
 
 ## Example
 
-```yaml
-version: "0.0.0"
-verbosity: all
+```hocon
+version = "0.0.0"
+verbosity = all
 
-# YAML anchors for reuse
-.cargo: &cargo !inline |-
-  set -e
-  set -u
-  cargo +nightly fmt --all -- --check
-  cargo test --all
+// HOCON substitutions for reuse
+_shared {
+  cargo = """set -e
+set -u
+cargo +nightly fmt --all -- --check
+cargo test --all"""
+}
 
-hooks:
-  "pre-commit":
-    # re-use YAML anchor — only runs when Rust files are staged
-    - command: *cargo
-      files: !glob "**/*.rs"
+hooks {
+  pre-commit = [
+    // re-use substitution — only runs when Rust files are staged
+    {
+      command.inline = ${_shared.cargo}
+      files.glob = "**/*.rs"
+    }
 
-    # inline command with output control
-    - command: !inline |-
-        cargo doc --no-deps
-      verbosity: stderr
-      severity: warn
+    // inline command with output control
+    {
+      command.inline = "cargo doc --no-deps"
+      verbosity = stderr
+      severity = warn
+    }
 
-    # reference a script file (path relative to repo root)
-    - command: !file "./hello_world.sh"
+    // reference a script file (path relative to repo root)
+    { command.file = "./hello_world.sh" }
 
-    # custom program executor with glob file matching
-    - command: !file "./hello_world.py"
-      program: ["python3", "-c"]
-      files: !glob "**/*.py"
-      verbosity: stderr
-      severity: error
+    // custom program executor with glob file matching
+    {
+      command.file = "./hello_world.py"
+      program = ["python3", "-c"]
+      files.glob = "**/*.py"
+      verbosity = stderr
+      severity = error
+    }
 
-    # multiple glob patterns
-    - command: !inline 'prettier --check .'
-      files: !glob
-        - "**/*.js"
-        - "**/*.ts"
-        - "**/*.css"
+    // multiple glob patterns
+    {
+      command.inline = "prettier --check ."
+      files.glob = ["**/*.js", "**/*.ts", "**/*.css"]
+    }
 
-    # regex pattern
-    - command: !inline 'check-migrations'
-      files: !regex "migrations/.*\\.sql$"
+    // regex pattern
+    {
+      command.inline = "check-migrations"
+      files.regex = "migrations/.*\\.sql$"
+    }
 
-    # multiple regex patterns
-    - command: !inline 'validate-schema'
-      files: !regex
-        - "src/schema/.*\\.rs$"
-        - ".*\\.graphql$"
+    // both glob and regex (OR: runs if either matches)
+    {
+      command.inline = "validate-schema"
+      files { glob = "**/*.graphql", regex = "src/schema/.*\\.rs$" }
+    }
+  ]
 
-  "pre-push":
-    - command: *cargo
-      files: !glob "**/*.rs"
+  pre-push = [
+    {
+      command.inline = ${_shared.cargo}
+      files.glob = "**/*.rs"
+    }
+  ]
 
-  "prepare-commit-msg":
-    # write to $COMMIT_MSG_FILE ($1) — template commit message for $EDITOR
-    # $0 = path to ".hoox.yaml" file in any hook
-    - command: !inline |-
-        COMMIT_MSG_FILE=$1
-        echo "Work in progress" > $COMMIT_MSG_FILE
+  prepare-commit-msg = [
+    // write to $COMMIT_MSG_FILE ($1) — template commit message for $EDITOR
+    // $0 = path to ".hoox.conf" file in any hook
+    {
+      command.inline = """
+COMMIT_MSG_FILE=$1
+echo "Work in progress" > $COMMIT_MSG_FILE"""
+    }
+  ]
+}
 ```
 
 ### File matching
 
-The `files` field uses YAML tags to select the matching mode — `!glob` or `!regex`:
-```yaml
-files: !glob "**/*.rs"                    # single glob
-files: !glob ["**/*.rs", "**/*.toml"]     # multiple globs
-files: !regex "src/.*\\.rs$"              # single regex
-files: !regex [".*\\.rs$", ".*test.*"]    # multiple regexes
+The `files` field supports `glob` and `regex` matching:
+```hocon
+files.glob = "**/*.rs"                    // single glob
+files.glob = ["**/*.rs", "**/*.toml"]     // multiple globs
+files.regex = "src/.*\\.rs$"              // single regex
+files.regex = [".*\\.rs$", ".*test.*"]    // multiple regexes
+files { glob = "**/*.rs", regex = ".*test.*" }  // both (OR logic)
 ```
 
 Changed file detection (via libgit2, no shell-out):

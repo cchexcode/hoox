@@ -26,7 +26,7 @@ pub fn find_repo_root(mut cwd: PathBuf) -> Result<PathBuf> {
     }
 }
 
-/// Create a `.hoox.yaml` config file at the repository root if one doesn't
+/// Create a `.hoox.conf` config file at the repository root if one doesn't
 /// exist.
 pub fn create_config(repo_path: &Path, template: Option<&str>) -> Result<()> {
     let hoox_path = repo_path.join(HOOX_FILE_NAME);
@@ -34,18 +34,19 @@ pub fn create_config(repo_path: &Path, template: Option<&str>) -> Result<()> {
         return Ok(());
     }
 
-    let hooks_comment = GIT_HOOK_NAMES.iter().map(|h| format!("# - {}", h)).collect::<Vec<_>>().join("\n");
+    let hooks_comment = GIT_HOOK_NAMES.iter().map(|h| format!("//   {}", h)).collect::<Vec<_>>().join("\n");
 
-    let template_content = template.unwrap_or("hooks:\n  \"pre-commit\":\n    - command: !inline 'echo hello'\n");
+    let template_content =
+        template.unwrap_or("hooks {\n  pre-commit = [\n    { command.inline = \"echo hello\" }\n  ]\n}\n");
 
     let content = format!(
-        "version: \"{}\"\nverbosity: all\n\n# Available Git hooks:\n{}\n\n{}\n",
+        "version = \"{}\"\nverbosity = all\n\n// Available Git hooks:\n{}\n\n{}\n",
         env!("CARGO_PKG_VERSION"),
         hooks_comment,
         template_content,
     );
 
-    std::fs::write(&hoox_path, content).context("failed to write .hoox.yaml")?;
+    std::fs::write(&hoox_path, content).context("failed to write .hoox.conf")?;
     Ok(())
 }
 

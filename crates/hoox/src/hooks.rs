@@ -19,9 +19,7 @@ use regex::Regex;
 
 use crate::config::{
     self,
-    CommandContent,
     CommandSeverity,
-    FileSelector,
     HookCommand,
     Hoox,
     PatternList,
@@ -34,11 +32,11 @@ pub fn run(hook: &str, args: &[String], ignore_missing: bool) -> Result<()> {
     let cwd = crate::init::find_repo_root(std::env::current_dir()?)?;
     let hoox_path = cwd.join(HOOX_FILE_NAME);
 
-    let content = std::fs::read_to_string(&hoox_path).context("failed to read .hoox.yaml")?;
+    let content = std::fs::read_to_string(&hoox_path).context("failed to read .hoox.conf")?;
 
     check_version(&content)?;
 
-    let hoox: Hoox = serde_yaml::from_str(&content).context("failed to parse .hoox.yaml")?;
+    let hoox: Hoox = hocon::de::from_str(&content).context("failed to parse .hoox.conf")?;
 
     let default_verbosity = hoox.verbosity.unwrap_or(Verbosity::All);
     let default_severity = hoox.severity.unwrap_or(CommandSeverity::Error);
@@ -46,7 +44,7 @@ pub fn run(hook: &str, args: &[String], ignore_missing: bool) -> Result<()> {
     let commands = match hoox.hooks.get(hook) {
         | Some(cmds) => cmds,
         | None if ignore_missing => return Ok(()),
-        | None => return Err(anyhow::anyhow!("hook '{}' not found in .hoox.yaml", hook)),
+        | None => return Err(anyhow::anyhow!("hook '{}' not found in .hoox.conf", hook)),
     };
 
     let changed_files = get_changed_files(hook, &cwd);
@@ -64,18 +62,15 @@ pub fn run(hook: &str, args: &[String], ignore_missing: bool) -> Result<()> {
         let mut exec = Command::new(&program[0]);
         exec.args(&program[1..]);
 
-        match &cmd.command {
-            | CommandContent::Inline(script) => {
-                exec.arg(script);
+        let script = match (&cmd.command.inline, &cmd.command.file) {
+            | (Some(s), None) => s.clone(),
+            | (None, Some(f)) => {
+                std::fs::read_to_string(cwd.join(f)).with_context(|| format!("failed to read script file: {}", f))?
             },
-            | CommandContent::File(file) => {
-                let script = std::fs::read_to_string(cwd.join(file))
-                    .with_context(|| format!("failed to read script file: {}", file))?;
-                exec.arg(script);
-            },
-        }
+            | _ => return Err(anyhow::anyhow!("command must have exactly one of 'inline' or 'file'")),
+        };
 
-        exec.arg(&hoox_path).args(args);
+        exec.arg(&script).arg(&hoox_path).args(args);
 
         let output = exec.output().with_context(|| format!("failed to execute: {}", program[0]))?;
 
@@ -106,7 +101,7 @@ pub fn run(hook: &str, args: &[String], ignore_missing: bool) -> Result<()> {
 
 fn check_version(content: &str) -> Result<()> {
     let version: config::WithVersion =
-        serde_yaml::from_str(content).context("failed to parse version from .hoox.yaml")?;
+        hocon::de::from_str(content).context("failed to parse version from .hoox.conf")?;
 
     let file_v: Vec<&str> = version.version.split('.').collect();
     let cli_v: Vec<&str> = env!("CARGO_PKG_VERSION").split('.').collect();
@@ -198,21 +193,35 @@ fn collect_diff_paths(diff: &git2::Diff) -> Vec<String> {
 }
 
 /// Determine whether a command should run based on its file selector.
-/// - No `files` set: always run.
+/// - No `files` set or empty selector: always run.
 /// - Set but no changed files: skip.
+/// - Glob and/or regex set: run if any changed file matches either (OR).
 fn should_run_for_files(cmd: &HookCommand, changed_files: &[String]) -> Result<bool> {
     let Some(ref selector) = cmd.files else {
         return Ok(true);
     };
 
+    if !selector.has_patterns() {
+        return Ok(true);
+    }
+
     if changed_files.is_empty() {
         return Ok(false);
     }
 
-    match selector {
-        | FileSelector::Glob(patterns) => matches_glob(patterns, changed_files),
-        | FileSelector::Regex(patterns) => matches_regex(patterns, changed_files),
+    if let Some(ref patterns) = selector.glob {
+        if matches_glob(patterns, changed_files)? {
+            return Ok(true);
+        }
     }
+
+    if let Some(ref patterns) = selector.regex {
+        if matches_regex(patterns, changed_files)? {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 /// Check if any changed file matches the given glob patterns.

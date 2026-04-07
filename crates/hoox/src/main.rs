@@ -16,7 +16,7 @@ fn main() -> Result<()> {
         | args::Command::Init { template } => {
             let repo = init::find_repo_root(std::env::current_dir()?)?;
             let content = match template {
-                | args::InitTemplate::Rust => include_str!("../res/templates/rust.yaml"),
+                | args::InitTemplate::Rust => include_str!("../res/templates/rust.conf"),
             };
             init::create_config(&repo, Some(content))?;
             init::install_hooks(&repo)?;

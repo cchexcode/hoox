@@ -15,7 +15,7 @@ pub struct Cli {
 pub enum Command {
     /// Initialize repository hooks
     Init {
-        /// Template to use for the initial .hoox.yaml
+        /// Template to use for the initial .hoox.conf
         #[arg(short, long, default_value = "rust")]
         template: InitTemplate,
     },
