@@ -39,6 +39,8 @@ pub enum Command {
         #[arg(short, long)]
         format: ManualFormat,
     },
+    /// Print the .hoox.conf format specification and reference
+    Spec,
     /// Generate shell completion scripts
     Autocomplete {
         /// Output directory

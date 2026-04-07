@@ -43,6 +43,9 @@ pub struct Hoox {
     pub verbosity: Option<Verbosity>,
     pub severity: Option<CommandSeverity>,
     pub hooks: HashMap<String, Vec<HookCommand>>,
+    /// Paths to additional `.hoox.conf` files (relative to repo root).
+    /// Their hooks are merged into this config (appended to hook lists).
+    pub include: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,40 +56,29 @@ pub struct HookCommand {
     pub severity: Option<CommandSeverity>,
     pub verbosity: Option<Verbosity>,
     /// File selector to match against changed files.
-    /// Set `glob` for glob patterns, `regex` for regex patterns, or both (OR).
     pub files: Option<FileSelector>,
+    /// Working directory for this command (relative to repo root).
+    pub cwd: Option<String>,
+    /// Run this command in parallel with adjacent `parallel = true` commands.
+    pub parallel: Option<bool>,
+    /// Environment variable configuration.
+    pub env: Option<EnvConfig>,
 }
 
 /// Command specification: exactly one of `inline` or `file` must be set.
-///
-/// ```hocon
-/// command.inline = "echo hello"
-/// command.file = "./scripts/lint.sh"
-/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CommandSpec {
-    /// Inline shell command string.
     pub inline: Option<String>,
-    /// Path to a script file (relative to repo root).
     pub file: Option<String>,
 }
 
 /// File selector for matching changed files.
 /// Set `glob` for glob patterns, `regex` for regex, or both (OR logic).
-///
-/// ```hocon
-/// files.glob = "**/*.rs"
-/// files.glob = ["**/*.rs", "**/*.toml"]
-/// files.regex = "src/.*\\.rs$"
-/// files { glob = "**/*.rs", regex = ".*test.*" }
-/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileSelector {
-    /// Glob patterns to match against changed file paths.
     pub glob: Option<PatternList>,
-    /// Regex patterns to match against changed file paths.
     pub regex: Option<PatternList>,
 }
 
@@ -111,6 +103,20 @@ impl PatternList {
             | PatternList::Multiple(v) => v.iter().map(|s| s.as_str()).collect(),
         }
     }
+}
+
+/// Environment variable configuration for a command.
+///
+/// - `keep`: regex patterns for env var names to preserve from the current
+///   environment. When set, the command starts with a clean env and only
+///   inherits vars whose names match at least one pattern. When absent, the
+///   full current environment is inherited.
+/// - `vars`: additional env vars to set (always applied on top).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnvConfig {
+    pub vars: Option<HashMap<String, String>>,
+    pub keep: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -258,5 +264,66 @@ hooks {
         assert_eq!(cmds[0].command.file.as_ref().unwrap(), "./scripts/lint.sh");
         assert_eq!(cmds[0].verbosity, Some(Verbosity::Stderr));
         assert_eq!(cmds[0].severity, Some(CommandSeverity::Warn));
+    }
+
+    #[test]
+    fn test_deserialize_monorepo_features() {
+        let conf = r#"
+version = "0.0.0"
+hooks {
+  pre-commit = [
+    {
+      command.inline = "cargo test"
+      cwd = "crates/api"
+      files.glob = "crates/api/**/*.rs"
+      parallel = true
+      env {
+        keep = ["PATH", "HOME", "RUST_.*"]
+        vars { RUST_LOG = "debug", CI = "true" }
+      }
+    }
+    {
+      command.inline = "npm test"
+      cwd = "packages/web"
+      parallel = true
+      env.vars { NODE_ENV = "test" }
+    }
+  ]
+}
+"#;
+        let hoox: Hoox = hocon::de::from_str(conf).unwrap();
+        let cmds = &hoox.hooks["pre-commit"];
+        assert_eq!(cmds.len(), 2);
+
+        let c0 = &cmds[0];
+        assert_eq!(c0.cwd.as_ref().unwrap(), "crates/api");
+        assert_eq!(c0.parallel, Some(true));
+        let env = c0.env.as_ref().unwrap();
+        assert_eq!(env.keep.as_ref().unwrap().len(), 3);
+        assert_eq!(env.vars.as_ref().unwrap()["RUST_LOG"], "debug");
+        assert_eq!(env.vars.as_ref().unwrap()["CI"], "true");
+
+        let c1 = &cmds[1];
+        assert_eq!(c1.cwd.as_ref().unwrap(), "packages/web");
+        assert_eq!(c1.parallel, Some(true));
+        let env1 = c1.env.as_ref().unwrap();
+        assert!(env1.keep.is_none());
+        assert_eq!(env1.vars.as_ref().unwrap()["NODE_ENV"], "test");
+    }
+
+    #[test]
+    fn test_deserialize_include() {
+        let conf = r#"
+version = "0.0.0"
+include = ["crates/api/.hoox.conf", "packages/web/.hoox.conf"]
+hooks {
+  pre-commit = [
+    { command.inline = "echo root" }
+  ]
+}
+"#;
+        let hoox: Hoox = hocon::de::from_str(conf).unwrap();
+        assert_eq!(hoox.include.as_ref().unwrap().len(), 2);
+        assert_eq!(hoox.include.as_ref().unwrap()[0], "crates/api/.hoox.conf");
     }
 }

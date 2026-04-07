@@ -26,6 +26,7 @@ anyhow.workspace = true
 git2.workspace = true
 globset.workspace = true
 regex.workspace = true
+serde_json.workspace = true
 
 [build-dependencies]
 ci_info = "0.14"

@@ -543,6 +543,7 @@ dependencies = [
  "hocon",
  "regex",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

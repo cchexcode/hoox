@@ -20,6 +20,7 @@ anyhow = "1"
 git2 = "0.19"
 globset = "0.4"
 regex = "1"
+serde_json = "1"
 
 [profile.release]
 lto = true

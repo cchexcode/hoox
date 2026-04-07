@@ -2,7 +2,7 @@
 
 ![](hoox.png)
 
-`hoox` is a CLI tool that allows users to manage Git hooks declaratively as part of the repository.
+`hoox` is a CLI tool that allows users to manage Git hooks declaratively as part of the repository. First-class monorepo support.
 
 ## Workflow
 
@@ -101,8 +101,6 @@ hooks {
   ]
 
   prepare-commit-msg = [
-    // write to $COMMIT_MSG_FILE ($1) — template commit message for $EDITOR
-    // $0 = path to ".hoox.conf" file in any hook
     {
       command.inline = """
 COMMIT_MSG_FILE=$1
@@ -111,6 +109,94 @@ echo "Work in progress" > $COMMIT_MSG_FILE"""
   ]
 }
 ```
+
+## Monorepo support
+
+### Include
+
+Import hook definitions from per-package config files:
+
+```hocon
+version = "0.0.0"
+include = ["crates/api/.hoox.conf", "packages/web/.hoox.conf"]
+hooks { }
+```
+
+Included files are full `.hoox.conf` files. Their hooks are appended to the root's hook lists.
+
+### Working directory (`cwd`)
+
+Run a command in a specific directory (relative to repo root):
+
+```hocon
+{
+  command.inline = "cargo test"
+  cwd = "crates/api"
+  files.glob = "crates/api/**/*.rs"
+}
+```
+
+### Parallel execution
+
+Consecutive commands with `parallel = true` run concurrently:
+
+```hocon
+hooks {
+  pre-commit = [
+    {
+      command.inline = "cargo test"
+      cwd = "crates/api"
+      files.glob = "crates/api/**"
+      parallel = true
+    }
+    {
+      command.inline = "npm test"
+      cwd = "packages/web"
+      files.glob = "packages/web/**"
+      parallel = true
+    }
+    // This runs after both parallel commands complete
+    { command.inline = "echo done" }
+  ]
+}
+```
+
+### Stdin: changed files
+
+Every command receives matched changed files as a JSON array on stdin.
+Each entry has `path` and `type` (`added`, `modified`, `deleted`, `renamed`, `copied`):
+
+```json
+[{"path":"src/app.ts","type":"modified"},{"path":"src/new.ts","type":"added"}]
+```
+
+Commands that don't read stdin are unaffected. Use with `jq` or any JSON parser:
+
+```hocon
+{
+  command.inline = "cat | jq -r '.[].path' | xargs prettier --check"
+  files.glob = ["**/*.js", "**/*.ts"]
+}
+```
+
+### Environment variables
+
+```hocon
+{
+  command.inline = "npm test"
+  cwd = "packages/web"
+  env {
+    // Only keep env vars matching these regex patterns (clean env otherwise)
+    keep = ["PATH", "HOME", "NODE_.*", "NPM_.*"]
+    // Additional vars to set
+    vars { NODE_ENV = "test", CI = "true" }
+  }
+}
+```
+
+- `keep`: regex patterns for env var names to preserve. When set, the command starts with a clean env.
+- `vars`: additional env vars to set on top.
+- `HOOX_CHANGED_FILES` is always set (newline-separated list of matched files).
 
 ### File matching
 

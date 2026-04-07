@@ -28,6 +28,9 @@ fn main() -> Result<()> {
         } => {
             hooks::run(&hook, &args, ignore_missing)?;
         },
+        | args::Command::Spec => {
+            print!("{}", include_str!("../res/SPEC.md"));
+        },
         | args::Command::Man { out, format } => {
             let out_path = PathBuf::from(out);
             std::fs::create_dir_all(&out_path)?;
