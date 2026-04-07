@@ -1,13 +1,185 @@
-version: "0.5"
+version: "0.0"
+env:
+  vars:
+    SHELLOPTS: "errexit:nounset:pipefail"
+    PROGRAM: "hoox"
 nodes:
-  release:
+  "build:docs":
+    description: "Builds the documentation."
     tasks:
-      - script: |-
+      - script: |
+          cargo doc --no-deps --document-private-items
+  "build:program":
+    description: "Builds program."
+    env:
+      vars:
+        SHELLOPTS: "errexit:pipefail"
+    matrix:
+      parallel: false
+      dimensions:
+        - - {}
+          - env:
+              vars:
+                RELEASE: --release
+    tasks:
+      - script: |
+          set -e
+          cargo build -p hoox ${RELEASE:-}
+  "dependencies:upgrade":
+    description: "Upgrades all dependencies."
+    tasks:
+      - script: |
+          cargo upgrade -i --pinned
+  "test:program":
+    description: "Tests the program."
+    tasks:
+      - script: |
+          cargo test --no-fail-fast
+  "hook:pre-push":
+    description: "GIT pre-push hook."
+    pre:
+      - regex: "^build:"
+      - name: "test:program"
+    tasks: []
+  "release:init":
+    description: "Initializes release folder."
+    pre:
+      - regex: "^build:"
+      - name: "test:program"
+    tasks:
+      - script: |
+          rm -rf ./.release || true
+          mkdir ./.release
+          mkdir ./.release/temp
+          mkdir ./.release/assets
+  "release:asset:generate:compile":
+    description: "Compiles the application."
+    env:
+      vars:
+        SHELLOPTS: "errexit:pipefail"
+    pre:
+      - name: "release:init"
+    matrix:
+      parallel: true
+      dimensions:
+        - - env:
+              vars:
+                TARGET: aarch64-apple-darwin
+          - env:
+              vars:
+                TARGET: aarch64-unknown-linux-gnu
+          - env:
+              vars:
+                TARGET: x86_64-unknown-linux-gnu
+          - env:
+              vars:
+                TARGET: x86_64-unknown-linux-musl
+    tasks:
+      - script: |
+          rustup target add ${TARGET} || true
+          cargo zigbuild --release --target ${TARGET}
+          cp ./target/${TARGET}/release/${PROGRAM} ./.release/assets/${PROGRAM}-${TARGET}
+  "release:asset:hash":
+    description: "Hashes all assets."
+    pre:
+      - regex: "^release:asset:generate:"
+    tasks:
+      - script: |
+          mkdir -p ./.release/temp/hashes
+          cd ./.release/assets
+          for file in ./*; do
+            echo "Hashing: ${file}"
+            sha256sum "${file}" > "./../temp/hashes/$(basename "${file}").sha256"
+            echo ""
+          done
+  "release:asset:sign":
+    description: "Signs all assets."
+    pre:
+      - regex: "^release:asset:generate:"
+    tasks:
+      - script: |
+          mkdir -p ./.release/temp/signatures
+          for file in ./.release/assets/*; do
+            echo "Signing: ${file}"
+            gpg --batch --yes --local-user "{{ signer }}" --armor --detach-sig --output "./.release/temp/signatures/$(basename "${file}").asc" "${file}"
+            echo ""
+          done
+  "release:asset:verify":
+    description: "Verifies all assets with their respective signatures."
+    pre:
+      - name: "release:asset:sign"
+    tasks:
+      - script: |
+          for sig in ./.release/temp/signatures/*.asc; do
+            file="./.release/assets/$(basename "${sig%.asc}")"
+            echo "Verifying: ${file} with signature ${sig}"
+            gpg --batch --yes --verify "${sig}" "${file}"
+            echo ""
+          done
+  "release:github:readme":
+    description: "Creates a README.md file for the release."
+    pre:
+      - regex: "^release:asset:"
+    tasks:
+      - script: |
+          mkdir -p ./.release/temp/github
+          printf '' > ./.release/temp/github/README.md
+
+          echo "## Assets\n" >> ./.release/temp/github/README.md
+          echo "### Binaries\n" >> ./.release/temp/github/README.md
+          for file in ./.release/assets/*; do
+            echo "- \`$(basename "${file}")\`" >> ./.release/temp/github/README.md
+          done
+          echo "\n### Signatures\n" >> ./.release/temp/github/README.md
+          echo "_Signer_: \`{{ signer }}\`\n" >> ./.release/temp/github/README.md
+          for file in ./.release/temp/signatures/*; do
+            echo "- \`$(basename "${file}")\`" >> ./.release/temp/github/README.md
+          done
+          echo "\n### Hashes\n" >> ./.release/temp/github/README.md
+          for file in ./.release/temp/hashes/*; do
+            echo "- \`$(basename "${file}")\`" >> ./.release/temp/github/README.md
+          done
+
+          echo "\n## Hashes\n" >> ./.release/temp/github/README.md
+          echo "| Asset | SHA256 Hash |" >> ./.release/temp/github/README.md
+          echo "| --- | --- |" >> ./.release/temp/github/README.md
+          for file in ./.release/temp/hashes/*; do
+            asset=$(basename "${file}" .sha256)
+            hash=$(cut -d' ' -f1 "${file}")
+            echo "| \`${asset}\` | \`${hash}\` |" >> ./.release/temp/github/README.md
+          done
+  "release:github":
+    description: "Releases to GitHub."
+    pre:
+      - regex: "^release:github:"
+    tasks:
+      - script: |
+          echo "=== === ==="
+          echo "Releasing ${PROGRAM} version: {{ version }}"
+          echo "--- --- ---"
+      - script: |
+          if ! [ -z "$(git status --porcelain)" ]; then
+            echo "Dirty repo. Please commit all changes before releasing."
+            exit 1
+          fi
+      - script: |
+          if ! gh auth status >/dev/null 2>&1; then
+              echo "You need to login: gh auth login"
+              exit 1
+          fi
+      - script: |
+          git tag release/v{{ version }}
+          git push
+          gh release create release/v{{ version }} --latest --target=master --title="Release {{ version }}" --notes-file ./.release/temp/github/README.md ./.release/assets/* ./.release/temp/hashes/* ./.release/temp/signatures/*
+  "release:cratesio":
+    description: "Releases to crates.io."
+    pre:
+      - regex: "^build:"
+    tasks:
+      - script: |
+          cargo publish -p hoox --dry-run
           cp Cargo.toml Cargo.toml.bak
-          sed 's/version = "0.0.0"/version = "'{{ version }}'"/g' Cargo.toml > Cargo.toml.tmp
+          sed 's/version = "0.0.0"/version = "{{ version }}"/g' Cargo.toml > Cargo.toml.tmp
           mv Cargo.toml.tmp Cargo.toml
-          echo "Releasing version {{ version }}"
-          cargo publish --allow-dirty
-          git tag {{ version }}
-          git push origin tag {{ version }}
+          cargo publish -p hoox --allow-dirty
           mv Cargo.toml.bak Cargo.toml
