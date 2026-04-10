@@ -18,16 +18,20 @@ TABLE OF CONTENTS
   4.  Hook Commands
   5.  Command Types (inline / file)
   6.  File Matching (glob / regex)
-  7.  Working Directory (cwd)
-  8.  Parallel Execution
-  9.  Stdin: Changed Files
-  10. Environment Variables (env)
-  11. HOOX_CHANGED_FILES
-  12. Includes (Monorepo)
-  13. Version Compatibility
-  14. Hook Wrapper Scripts
-  15. Available Git Hooks
-  16. Complete Example
+  7.  Branch Filter
+  8.  Working Directory (cwd)
+  9.  Parallel Execution
+  10. Timeout
+  11. Retry
+  12. Caching
+  13. Stdin: Changed Files
+  14. Environment Variables (env)
+  15. HOOX_CHANGED_FILES
+  16. Includes (Monorepo)
+  17. Version Compatibility
+  18. Hook Wrapper Scripts
+  19. Available Git Hooks
+  20. Complete Example
 
 
 1. CLI COMMANDS
@@ -37,10 +41,28 @@ TABLE OF CONTENTS
     Initialize repository hooks. Creates .hoox.conf from a
     template and installs wrapper scripts in .git/hooks/.
 
-  hoox run <hook> [args...] [--ignore-missing]
+  hoox run <hook> [args...] [--ignore-missing] [--dry-run]
     Execute a specific hook. This is what the wrapper scripts
     call. Pass --ignore-missing to silently skip hooks not
     defined in .hoox.conf.
+    Pass --dry-run to show which commands would run (and which
+    would be skipped) without executing anything.
+    After execution, prints a status summary to stderr:
+      hoox: 3 passed, 1 failed, 2 skipped, 1 cached
+
+  hoox validate
+    Parse .hoox.conf, check version compatibility, verify that
+    command.file paths exist, and validate all glob, regex, and
+    branch patterns. Prints "ok" or lists errors.
+
+  hoox list
+    Print all configured hooks and their commands in a summary
+    format. Shows command index, first line of script, and tags
+    for active features (files, parallel, cwd, timeout, branch,
+    cache, retry, env).
+
+  hoox clean
+    Delete the .hoox.cache file.
 
   hoox spec
     Print this format specification to stdout.
@@ -81,7 +103,7 @@ Reference: https://github.com/lightbend/config/blob/main/HOCON.md
 
   version    (string, REQUIRED)
              Semantic version for config compatibility.
-             See section 13.
+             See section 16.
 
   verbosity  (string, optional, default: "all")
              Default output behavior for all commands.
@@ -94,27 +116,17 @@ Reference: https://github.com/lightbend/config/blob/main/HOCON.md
 
   hooks      (object, REQUIRED)
              Map of hook names to arrays of commands.
-             Keys are Git hook names (see section 15).
+             Keys are Git hook names (see section 18).
              May be empty: hooks { }
 
   include    (array of strings, optional)
              Paths to additional .hoox.conf files.
-             See section 12.
+             See section 15.
 
 Minimal valid config:
 
   version = "0.0.0"
   hooks { }
-
-Typical config:
-
-  version = "0.0.0"
-  verbosity = all
-  severity = error
-  hooks {
-    pre-commit = [ ... ]
-    pre-push = [ ... ]
-  }
 
 
 4. HOOK COMMANDS
@@ -138,16 +150,20 @@ Command object fields:
   verbosity    string            (inherit)   3
   severity     string            (inherit)   3
   files        object            (none)      6
-  cwd          string            (none)      7
-  parallel     bool              false       8
-  env          object            (none)      10
+  branch       string            (none)      7
+  cwd          string            (none)      8
+  parallel     bool              false       9
+  timeout      integer           (none)      10
+  retry        integer           0           11
+  cache        bool              false       12
+  env          object            (none)      14
 
 Commands execute top-to-bottom unless `parallel` is set.
 If a command fails and severity is "error", hoox exits
 immediately with the command's exit code.
 
 Every command receives matched changed files as a JSON array
-on stdin (see section 9).
+on stdin (see section 12).
 
 
 5. COMMAND TYPES (inline / file)
@@ -174,12 +190,6 @@ INLINE:
   cargo test
   cargo build"""
 
-  NOT this (would add leading spaces to every line):
-
-    command.inline = """set -e
-      cargo test
-      cargo build"""
-
 FILE:
 
   Path relative to repo root. The file's contents are read
@@ -194,10 +204,6 @@ PROGRAM:
   program = ["python3", "-c"]
   program = ["bash", "-c"]
   program = ["node", "-e"]
-
-  The script (from inline or file) is passed as the FIRST
-  argument to the program. Then the hoox config path, then
-  any hook arguments from Git.
 
   Argument order:
     program[0] program[1..] <script> <hoox_path> <git_args>
@@ -244,9 +250,6 @@ BEHAVIOR:
   - `files` set, no match:  command is SKIPPED.
   - `files` set, match:     command RUNS.
 
-  The set of matched files is piped to stdin as JSON (section 9)
-  and set in HOOX_CHANGED_FILES (section 11).
-
 GLOB SYNTAX (globset crate):
 
   *        any sequence of characters except /
@@ -263,7 +266,30 @@ REGEX SYNTAX (Rust regex crate):
   Example path: "crates/api/src/main.rs"
 
 
-7. WORKING DIRECTORY (cwd)
+7. BRANCH FILTER
+-----------------
+
+The `branch` field is a regex matched against the current Git
+branch name. The command only runs if the branch matches.
+
+  {
+    command.inline = "cargo test --all"
+    branch = "main|develop"
+  }
+
+  {
+    command.inline = "quick-lint"
+    branch = "feature/.*"
+  }
+
+If the repo is in detached HEAD state (no branch), commands
+with a `branch` filter are skipped.
+
+Use this for heavy test suites that should only run on certain
+branches, while keeping quick linters on all branches.
+
+
+8. WORKING DIRECTORY (cwd)
 --------------------------
 
 Run a command in a specific directory relative to the repo root:
@@ -280,7 +306,7 @@ Without `cwd`, commands inherit the current working directory
 Essential for monorepos where each package has its own tooling.
 
 
-8. PARALLEL EXECUTION
+9. PARALLEL EXECUTION
 ---------------------
 
 Consecutive commands with `parallel = true` are grouped into
@@ -312,13 +338,89 @@ Execution:
   3. After BOTH complete, "echo done" runs
 
 Each command in a parallel batch independently evaluates its
-own file filter, env, cwd, and stdin payload.
+own file filter, branch, cache, env, cwd, and stdin payload.
 
 If any command fails with severity=error, hoox exits after the
 entire batch completes (does not kill sibling threads early).
 
 
-9. STDIN: CHANGED FILES
+10. TIMEOUT
+-----------
+
+The `timeout` field specifies a maximum duration in seconds.
+If the command exceeds this duration, it is killed.
+
+  {
+    command.inline = "npm test"
+    timeout = 120
+  }
+
+On timeout, hoox reports an error message including the
+command label and the timeout value. The command is treated
+as a failure regardless of severity.
+
+Without `timeout`, commands run indefinitely.
+
+
+11. RETRY
+---------
+
+The `retry` field specifies how many additional attempts to make
+if the command fails. Default is 0 (no retries).
+
+  {
+    command.inline = "npm audit"
+    retry = 3
+  }
+
+This runs the command up to 4 times total (1 initial + 3 retries).
+On each failure before the final attempt, hoox prints a message:
+
+  hoox: pre-commit:0: failed (attempt 1/4, retrying)
+
+Retries also apply to timeouts — a timed-out command is retried
+if attempts remain.
+
+Use this for network-dependent checks (npm audit, license
+scanners, external API calls) that may fail transiently.
+
+
+12. CACHING
+-----------
+
+Caching is OPT-IN. Set `cache = true` on a command to enable.
+
+  {
+    command.inline = "cargo test"
+    files.glob = "**/*.rs"
+    cache = true
+  }
+
+When enabled, hoox computes a SHA-256 hash of the matched file
+paths and their contents. If the hash matches the last successful
+run (stored in `.hoox.cache`), the command is skipped.
+
+The cache is stored in `.hoox.cache` at the repo root as a JSON
+file. Each entry is keyed by "hook:command_index" (e.g.,
+"pre-commit:0").
+
+BEHAVIOR:
+
+  - First run: command executes, hash is saved on success.
+  - Subsequent runs: if hash matches, command is skipped.
+  - If command fails: cache is NOT updated (stale hash kept).
+  - If files change: hash differs, command runs again.
+
+Add `.hoox.cache` to `.gitignore` — it is a local-only file
+that should not be committed.
+
+Caching works with all other features (files, branch, parallel,
+timeout, env, cwd). The cache check happens AFTER branch and
+file matching, so a command is only cached for the specific set
+of files that triggered it.
+
+
+13. STDIN: CHANGED FILES
 ------------------------
 
 Every command receives its matched changed files as a JSON
@@ -353,12 +455,6 @@ READING IN SHELL (jq):
   command.inline = """cat | jq -r '.[] | select(.type != "deleted") | .path' \
     | xargs eslint"""
 
-  Full processing:
-  command.inline = """CHANGED=$(cat)
-  echo "$CHANGED" | jq -r '.[] | "\(.type)\t\(.path)"' | while IFS=$'\t' read -r type path; do
-    echo "$type: $path"
-  done"""
-
 READING IN PYTHON:
 
   command.inline = """import json, sys
@@ -370,7 +466,7 @@ READING IN NODE:
 
   command.inline = """
   const files = JSON.parse(require('fs').readFileSync(0,'utf8'));
-  files.filter(f => f.type !== 'del').forEach(f => console.log(f.path));"""
+  files.filter(f => f.type !== 'deleted').forEach(f => console.log(f.path));"""
   program = ["node", "-e"]
 
 NOTE: If stdin is not read by the command, it is harmlessly
@@ -378,7 +474,7 @@ ignored. Existing commands that don't need the file list work
 without any changes.
 
 
-10. ENVIRONMENT VARIABLES (env)
+14. ENVIRONMENT VARIABLES (env)
 -------------------------------
 
 The `env` field configures the command's process environment:
@@ -405,10 +501,6 @@ SUB-FIELDS:
            2. vars are applied on top
            3. HOOX_CHANGED_FILES is set
 
-         The keep patterns use Rust regex syntax and match
-         against the full variable name. Use "^PATH$" for
-         exact match or "PATH" for substring match.
-
   vars   (object, optional)
          Key-value pairs of env vars to set. Always applied
          on top, whether or not `keep` is used. Overwrites
@@ -434,15 +526,8 @@ EXAMPLES:
       env.vars { RUST_LOG = "debug" }
     }
 
-  Minimal env (only PATH):
 
-    {
-      command.inline = "./scripts/isolated.sh"
-      env.keep = ["^PATH$"]
-    }
-
-
-11. HOOX_CHANGED_FILES
+15. HOOX_CHANGED_FILES
 -----------------------
 
 Every command receives the HOOX_CHANGED_FILES environment
@@ -454,18 +539,12 @@ relative to the repo root.
 
 This is always set, even without `env` configuration.
 
-Usage in a script:
-
-  command.inline = """echo "$HOOX_CHANGED_FILES" | while IFS= read -r f; do
-  echo "Processing: $f"
-  done"""
-
 HOOX_CHANGED_FILES is newline-separated (one file per line).
-Stdin (section 9) provides the same list as a JSON array.
-Use whichever is more convenient for your tooling.
+Stdin (section 12) provides the same list as a JSON array with
+type information. Use whichever is more convenient.
 
 
-12. INCLUDES (MONOREPO)
+16. INCLUDES (MONOREPO)
 -----------------------
 
 The `include` field imports hooks from additional config files:
@@ -499,25 +578,8 @@ LIMITATIONS:
   - Each included file can use its own HOCON substitutions,
     but substitutions do NOT cross file boundaries.
 
-EXAMPLE (per-package config):
 
-  // crates/api/.hoox.conf
-  version = "0.0.0"
-  _api {
-    test = "cargo test -p api"
-  }
-  hooks {
-    pre-commit = [
-      {
-        command.inline = ${_api.test}
-        cwd = "crates/api"
-        files.glob = "crates/api/**/*.rs"
-      }
-    ]
-  }
-
-
-13. VERSION COMPATIBILITY
+17. VERSION COMPATIBILITY
 -------------------------
 
 The `version` field ensures config/CLI compatibility:
@@ -535,7 +597,7 @@ Version is checked BEFORE any hooks execute. On mismatch,
 hoox exits with an error message.
 
 
-14. HOOK WRAPPER SCRIPTS
+18. HOOK WRAPPER SCRIPTS
 -------------------------
 
 `hoox init` installs wrapper scripts in .git/hooks/ for all
@@ -544,10 +606,6 @@ hoox exits with an error message.
   #!/bin/sh
   hoox run --ignore-missing "${0##*/}" "$@"
 
-This delegates to hoox, which reads .hoox.conf and runs the
-matching commands. --ignore-missing silently skips hooks not
-defined in .hoox.conf.
-
 The hoox binary must be installed and in PATH for hooks to
 execute. If hoox is not found, Git will report a hook failure.
 
@@ -555,7 +613,7 @@ Auto-install via build.rs: if hoox is a Rust build dependency,
 hooks are installed during `cargo build` (skipped in CI).
 
 
-15. AVAILABLE GIT HOOKS
+19. AVAILABLE GIT HOOKS
 -----------------------
 
 hoox supports all 19 standard Git hooks:
@@ -588,17 +646,15 @@ STAGED FILE DETECTION applies to:
 All other hooks use workdir-vs-HEAD diff.
 
 
-16. COMPLETE EXAMPLE
+20. COMPLETE EXAMPLE
 --------------------
 
 version = "0.0.0"
 verbosity = all
 severity = error
 
-// Import per-package hook configs
 include = ["packages/api/.hoox.conf"]
 
-// Shared definitions — reuse via ${_shared.key}
 _shared {
   cargo_check = """set -e
 cargo +nightly fmt --all -- --check
@@ -607,38 +663,53 @@ cargo test --all"""
 
 hooks {
   pre-commit = [
-    // Rust: format + test (only when .rs files change)
+    // Rust: format + test, cached, only on main/develop
     {
       command.inline = ${_shared.cargo_check}
       files.glob = "**/*.rs"
+      cache = true
+      branch = "main|develop"
     }
 
-    // JS/TS: lint only the changed files via stdin JSON
+    // JS/TS: lint changed files via stdin JSON, in parallel
     {
       command.inline = "cat | jq -r '.[].path' | xargs eslint"
       files.glob = ["**/*.js", "**/*.ts"]
       parallel = true
+      timeout = 60
       env.vars { NODE_ENV = "development" }
     }
 
-    // CSS: lint changed files, in parallel
+    // CSS: lint, in parallel with JS
     {
       command.inline = "cat | jq -r '.[].path' | xargs stylelint"
       files.glob = "**/*.css"
       parallel = true
+      timeout = 60
     }
 
-    // Python: run in package directory
+    // Python: run in package dir, cached
     {
       command.inline = "pytest"
       cwd = "packages/api"
       files.glob = "packages/api/**/*.py"
+      cache = true
+      timeout = 300
     }
 
-    // SQL migration check (regex match)
+    // SQL migration check (regex)
     {
       command.inline = "check-migrations"
       files.regex = "db/migrations/.*\\.sql$"
+    }
+
+    // Network-dependent check with retry
+    {
+      command.inline = "npm audit --production"
+      cwd = "packages/frontend"
+      retry = 2
+      timeout = 30
+      severity = warn
     }
 
     // Script file with custom executor
@@ -665,13 +736,6 @@ hooks {
     {
       command.inline = ${_shared.cargo_check}
       files.glob = "**/*.rs"
-    }
-  ]
-
-  prepare-commit-msg = [
-    {
-      command.inline = """COMMIT_MSG_FILE=$1
-echo "feat: " > $COMMIT_MSG_FILE"""
     }
   ]
 }

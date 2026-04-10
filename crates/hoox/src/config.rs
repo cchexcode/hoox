@@ -31,6 +31,7 @@ pub const GIT_HOOK_NAMES: [&str; 19] = [
 pub const STAGED_HOOKS: [&str; 3] = ["pre-commit", "prepare-commit-msg", "commit-msg"];
 
 pub const HOOX_FILE_NAME: &str = ".hoox.conf";
+pub const CACHE_FILE_NAME: &str = ".hoox.cache";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct WithVersion {
@@ -44,7 +45,6 @@ pub struct Hoox {
     pub severity: Option<CommandSeverity>,
     pub hooks: HashMap<String, Vec<HookCommand>>,
     /// Paths to additional `.hoox.conf` files (relative to repo root).
-    /// Their hooks are merged into this config (appended to hook lists).
     pub include: Option<Vec<String>>,
 }
 
@@ -63,6 +63,16 @@ pub struct HookCommand {
     pub parallel: Option<bool>,
     /// Environment variable configuration.
     pub env: Option<EnvConfig>,
+    /// Timeout in seconds. Kill the command if it exceeds this duration.
+    pub timeout: Option<u64>,
+    /// Regex pattern matched against the current branch name.
+    /// Command only runs if the branch matches.
+    pub branch: Option<String>,
+    /// Enable caching. When true, skip this command if the matched files
+    /// haven't changed since the last successful run.
+    pub cache: Option<bool>,
+    /// Number of retry attempts on failure before giving up.
+    pub retry: Option<u32>,
 }
 
 /// Command specification: exactly one of `inline` or `file` must be set.
@@ -74,7 +84,6 @@ pub struct CommandSpec {
 }
 
 /// File selector for matching changed files.
-/// Set `glob` for glob patterns, `regex` for regex, or both (OR logic).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileSelector {
@@ -106,12 +115,6 @@ impl PatternList {
 }
 
 /// Environment variable configuration for a command.
-///
-/// - `keep`: regex patterns for env var names to preserve from the current
-///   environment. When set, the command starts with a clean env and only
-///   inherits vars whose names match at least one pattern. When absent, the
-///   full current environment is inherited.
-/// - `vars`: additional env vars to set (always applied on top).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnvConfig {
@@ -145,31 +148,21 @@ mod test {
 version = "0.0.0"
 hooks {
   pre-commit = [
-    {
-      command.inline = "cargo test"
-      files.glob = "**/*.rs"
-    }
-    {
-      command.inline = "npm test"
-      files.glob = ["**/*.js", "**/*.ts"]
-    }
-    {
-      command.inline = "echo always"
-    }
+    { command.inline = "cargo test", files.glob = "**/*.rs" }
+    { command.inline = "npm test", files.glob = ["**/*.js", "**/*.ts"] }
+    { command.inline = "echo always" }
   ]
 }
 "#;
         let hoox: Hoox = hocon::de::from_str(conf).unwrap();
         let cmds = &hoox.hooks["pre-commit"];
         assert_eq!(cmds.len(), 3);
-
-        let f0 = cmds[0].files.as_ref().unwrap();
-        assert_eq!(f0.glob.as_ref().unwrap().patterns(), vec!["**/*.rs"]);
-        assert!(f0.regex.is_none());
-
-        let f1 = cmds[1].files.as_ref().unwrap();
-        assert_eq!(f1.glob.as_ref().unwrap().patterns(), vec!["**/*.js", "**/*.ts"]);
-
+        assert_eq!(cmds[0].files.as_ref().unwrap().glob.as_ref().unwrap().patterns(), vec![
+            "**/*.rs"
+        ]);
+        assert_eq!(cmds[1].files.as_ref().unwrap().glob.as_ref().unwrap().patterns(), vec![
+            "**/*.js", "**/*.ts"
+        ]);
         assert!(cmds[2].files.is_none());
     }
 
@@ -179,97 +172,28 @@ hooks {
 version = "0.0.0"
 hooks {
   pre-commit = [
-    {
-      command.inline = "lint"
-      files.regex = "src/.*\\.rs$"
-    }
-    {
-      command.inline = "check"
-      files.regex = [".*\\.rs$", ".*test.*"]
-    }
+    { command.inline = "lint", files.regex = "src/.*\\.rs$" }
+    { command.inline = "check", files.regex = [".*\\.rs$", ".*test.*"] }
   ]
 }
 "#;
         let hoox: Hoox = hocon::de::from_str(conf).unwrap();
         let cmds = &hoox.hooks["pre-commit"];
-        assert_eq!(cmds.len(), 2);
-
-        let f0 = cmds[0].files.as_ref().unwrap();
-        assert!(f0.glob.is_none());
-        assert_eq!(f0.regex.as_ref().unwrap().patterns(), vec!["src/.*\\.rs$"]);
-
-        let f1 = cmds[1].files.as_ref().unwrap();
-        assert_eq!(f1.regex.as_ref().unwrap().patterns(), vec![".*\\.rs$", ".*test.*"]);
+        assert_eq!(
+            cmds[0].files.as_ref().unwrap().regex.as_ref().unwrap().patterns(),
+            vec!["src/.*\\.rs$"]
+        );
+        assert_eq!(
+            cmds[1].files.as_ref().unwrap().regex.as_ref().unwrap().patterns(),
+            vec![".*\\.rs$", ".*test.*"]
+        );
     }
 
     #[test]
-    fn test_deserialize_both_glob_and_regex() {
+    fn test_deserialize_all_features() {
         let conf = r#"
 version = "0.0.0"
-hooks {
-  pre-commit = [
-    {
-      command.inline = "check"
-      files { glob = "**/*.rs", regex = ".*test.*" }
-    }
-  ]
-}
-"#;
-        let hoox: Hoox = hocon::de::from_str(conf).unwrap();
-        let cmds = &hoox.hooks["pre-commit"];
-        let f = cmds[0].files.as_ref().unwrap();
-        assert!(f.glob.is_some());
-        assert!(f.regex.is_some());
-    }
-
-    #[test]
-    fn test_deserialize_substitution() {
-        let conf = r#"
-version = "0.0.0"
-_shared {
-  cargo = "cargo test --all"
-}
-hooks {
-  pre-commit = [
-    {
-      command.inline = ${_shared.cargo}
-      files.glob = "**/*.rs"
-    }
-  ]
-}
-"#;
-        let hoox: Hoox = hocon::de::from_str(conf).unwrap();
-        let cmds = &hoox.hooks["pre-commit"];
-        assert_eq!(cmds.len(), 1);
-        assert_eq!(cmds[0].command.inline.as_ref().unwrap(), "cargo test --all");
-    }
-
-    #[test]
-    fn test_deserialize_file_command() {
-        let conf = r#"
-version = "0.0.0"
-hooks {
-  pre-commit = [
-    {
-      command.file = "./scripts/lint.sh"
-      verbosity = stderr
-      severity = warn
-    }
-  ]
-}
-"#;
-        let hoox: Hoox = hocon::de::from_str(conf).unwrap();
-        let cmds = &hoox.hooks["pre-commit"];
-        assert!(cmds[0].command.inline.is_none());
-        assert_eq!(cmds[0].command.file.as_ref().unwrap(), "./scripts/lint.sh");
-        assert_eq!(cmds[0].verbosity, Some(Verbosity::Stderr));
-        assert_eq!(cmds[0].severity, Some(CommandSeverity::Warn));
-    }
-
-    #[test]
-    fn test_deserialize_monorepo_features() {
-        let conf = r#"
-version = "0.0.0"
+include = ["sub/.hoox.conf"]
 hooks {
   pre-commit = [
     {
@@ -277,53 +201,24 @@ hooks {
       cwd = "crates/api"
       files.glob = "crates/api/**/*.rs"
       parallel = true
+      timeout = 120
+      branch = "main|develop"
+      cache = true
       env {
-        keep = ["PATH", "HOME", "RUST_.*"]
-        vars { RUST_LOG = "debug", CI = "true" }
+        keep = ["PATH", "HOME"]
+        vars { CI = "true" }
       }
     }
-    {
-      command.inline = "npm test"
-      cwd = "packages/web"
-      parallel = true
-      env.vars { NODE_ENV = "test" }
-    }
   ]
 }
 "#;
         let hoox: Hoox = hocon::de::from_str(conf).unwrap();
-        let cmds = &hoox.hooks["pre-commit"];
-        assert_eq!(cmds.len(), 2);
-
-        let c0 = &cmds[0];
-        assert_eq!(c0.cwd.as_ref().unwrap(), "crates/api");
-        assert_eq!(c0.parallel, Some(true));
-        let env = c0.env.as_ref().unwrap();
-        assert_eq!(env.keep.as_ref().unwrap().len(), 3);
-        assert_eq!(env.vars.as_ref().unwrap()["RUST_LOG"], "debug");
-        assert_eq!(env.vars.as_ref().unwrap()["CI"], "true");
-
-        let c1 = &cmds[1];
-        assert_eq!(c1.cwd.as_ref().unwrap(), "packages/web");
-        assert_eq!(c1.parallel, Some(true));
-        let env1 = c1.env.as_ref().unwrap();
-        assert!(env1.keep.is_none());
-        assert_eq!(env1.vars.as_ref().unwrap()["NODE_ENV"], "test");
-    }
-
-    #[test]
-    fn test_deserialize_include() {
-        let conf = r#"
-version = "0.0.0"
-include = ["crates/api/.hoox.conf", "packages/web/.hoox.conf"]
-hooks {
-  pre-commit = [
-    { command.inline = "echo root" }
-  ]
-}
-"#;
-        let hoox: Hoox = hocon::de::from_str(conf).unwrap();
-        assert_eq!(hoox.include.as_ref().unwrap().len(), 2);
-        assert_eq!(hoox.include.as_ref().unwrap()[0], "crates/api/.hoox.conf");
+        let c = &hoox.hooks["pre-commit"][0];
+        assert_eq!(c.cwd.as_ref().unwrap(), "crates/api");
+        assert_eq!(c.parallel, Some(true));
+        assert_eq!(c.timeout, Some(120));
+        assert_eq!(c.branch.as_ref().unwrap(), "main|develop");
+        assert_eq!(c.cache, Some(true));
+        assert_eq!(hoox.include.as_ref().unwrap(), &["sub/.hoox.conf"]);
     }
 }

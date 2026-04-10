@@ -25,8 +25,18 @@ fn main() -> Result<()> {
             hook,
             args,
             ignore_missing,
+            dry_run,
         } => {
-            hooks::run(&hook, &args, ignore_missing)?;
+            hooks::run(&hook, &args, ignore_missing, dry_run)?;
+        },
+        | args::Command::Validate => {
+            hooks::validate()?;
+        },
+        | args::Command::Clean => {
+            hooks::clean()?;
+        },
+        | args::Command::List => {
+            hooks::list()?;
         },
         | args::Command::Spec => {
             print!("{}", include_str!("../res/SPEC.md"));

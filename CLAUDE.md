@@ -146,6 +146,26 @@ cmd E (sequential)    →  runs alone after B/C/D
 Output from parallel commands is printed as it arrives (no buffering). If any command in a
 parallel batch fails with `severity = error`, the process exits after the batch completes.
 
+### Timeout
+
+`timeout` kills a command after N seconds: `timeout = 120`. Treated as failure on timeout.
+
+### Branch filter
+
+`branch` is a regex matched against the current branch name. Command is skipped if no match.
+```hocon
+{ command.inline = "cargo test --all", branch = "main|develop" }
+```
+
+### Caching (opt-in)
+
+Set `cache = true` to skip a command if its matched files haven't changed since the last
+successful run. Uses SHA-256 of file paths + contents, stored in `.hoox.cache` (add to
+`.gitignore`). Cache check happens after branch and file matching.
+```hocon
+{ command.inline = "cargo test", files.glob = "**/*.rs", cache = true }
+```
+
 ### Stdin: changed files
 
 Every command receives its matched changed files as a JSON array piped to stdin.
@@ -195,10 +215,13 @@ hoox run --ignore-missing "${0##*/}" "$@"
 ## CLI Commands
 
 ```
-hoox init [-t rust]                    Initialize repo hooks
-hoox run <hook> [args...] [--ignore-missing]   Execute a hook
-hoox man -o <path> -f <manpages|markdown>      Generate docs
-hoox autocomplete -o <path> -s <shell>         Generate completions
+hoox init [-t rust]                              Initialize repo hooks
+hoox run <hook> [args...] [--ignore-missing] [--dry-run]  Execute a hook
+hoox validate                                    Check .hoox.conf for errors
+hoox list                                        Show configured hooks summary
+hoox spec                                        Print format specification
+hoox man -o <path> -f <manpages|markdown>        Generate docs
+hoox autocomplete -o <path> -s <shell>           Generate completions
 ```
 
 ## Coding Standards
@@ -237,8 +260,8 @@ Each module has a single clear responsibility:
 - **Exit code forwarding** — When a hook command fails with `severity = error`, exit with
   the command's exit code via `std::process::exit()` so Git sees the correct status.
 - **std::thread::scope** for parallel command execution. No async runtime.
-- **execute_command** returns `Result<Option<i32>>` — `None` = skipped/success,
-  `Some(code)` = failed. Caller handles exit.
+- **run_one** returns `Result<Option<i32>>` — `None` = skipped/success,
+  `Some(code)` = failed. Caller handles exit. Checks branch → files → cache → execute → update cache.
 
 ### Style
 
@@ -256,7 +279,9 @@ Each module has a single clear responsibility:
 - **anyhow** — Error handling with context chains.
 - **git2** — libgit2 bindings for changed-file detection (no shell-out to `git`).
 - **globset** — Fast glob pattern matching for `files.glob` selectors.
-- **regex** — Regex matching for `files.regex` and `env.keep` patterns.
+- **regex** — Regex matching for `files.regex`, `env.keep`, and `branch` patterns.
+- **serde_json** — JSON serialization for stdin piping and cache store.
+- **sha2** — SHA-256 hashing for cache integrity checking.
 - **ci_info** (build only) — CI environment detection for build.rs.
 
 ## Build

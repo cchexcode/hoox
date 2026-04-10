@@ -29,7 +29,18 @@ pub enum Command {
         /// Don't fail if the hook is not defined
         #[arg(long)]
         ignore_missing: bool,
+        /// Show what would run without executing
+        #[arg(long)]
+        dry_run: bool,
     },
+    /// Validate .hoox.conf without running anything
+    Validate,
+    /// Delete .hoox.cache
+    Clean,
+    /// List configured hooks and their commands
+    List,
+    /// Print the .hoox.conf format specification and reference
+    Spec,
     /// Generate manual pages
     Man {
         /// Output directory
@@ -39,8 +50,6 @@ pub enum Command {
         #[arg(short, long)]
         format: ManualFormat,
     },
-    /// Print the .hoox.conf format specification and reference
-    Spec,
     /// Generate shell completion scripts
     Autocomplete {
         /// Output directory
